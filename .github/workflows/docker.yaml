@@ -1,0 +1,69 @@
+name: docker
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'v*'
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout ${{ github.repository }}
+        uses: actions/checkout@v3
+
+      - name: Collect build context
+        id: context
+        run: |
+          echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to DockerHub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Get electrs tag ref
+        id: get_release_ref
+        uses: octokit/request-action@v2.x
+        with:
+          route: GET /repos/romanz/electrs/git/refs/tags/${{ steps.context.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata mapping
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            docker.io/${{ github.repository_owner }}/electrs
+            ghcr.io/${{ github.repository_owner }}/electrs
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BUILD_DATE=${{ steps.context.outputs.date }}
+            ELECTRS_VERSION=${{ steps.context.outputs.version }}
+            ELECTRS_HASH=${{ fromJson(steps.get_release_ref.outputs.data).object.sha }}
